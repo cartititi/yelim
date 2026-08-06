@@ -141,7 +141,7 @@
         <p style="font-family: 'Gaegu', cursive; font-size: 18px; color: #7a4b57; margin: 0 0 6px;">{{ dodgeHint }}</p>
         <div id="dodge-stage" style="position: relative; width: 100%; height: 260px; margin-top: 6px;">
           <button onClick="{{ sayYes }}" style="{{ yesStyle }}" style-active="{{ pressStyle }}">응! 좋아 💕</button>
-          <button onClick="{{ dodgeNo }}" onMouseEnter="{{ dodgeNo }}" style="{{ noStyle }}">싫어...</button>
+          <button onClick="{{ dodgeNo }}" onMouseEnter="{{ dodgeNo }}" onTouchStart="{{ dodgeNo }}" style="{{ noStyle }}">싫어...</button>
         </div>
       </div>
     </sc-if>
@@ -246,7 +246,6 @@ class Component extends DCLogic {
     this._mounted = false;
     if (this._raf) cancelAnimationFrame(this._raf);
     if (this._bgm) this._bgm.pause();
-    this.stopMic();
   }
 
   type(field, text, speed, done) {
@@ -275,12 +274,10 @@ class Component extends DCLogic {
 
   goToCandle = () => {
     this.setState({ screen: 2, candlesOut: false });
-    this.tryMic();
   };
 
   blowCandles = () => {
     if (this.state.candlesOut) return;
-    this.stopMic();
     this.setState({ candlesOut: true });
     this.burst();
     setTimeout(() => {
@@ -298,36 +295,6 @@ class Component extends DCLogic {
     this.burst();
     setTimeout(() => this.burst(), 600);
   };
-
-  // ---- mic blow detection (optional; tap always works) ----
-  tryMic() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-      if (!this._mounted || this.state.screen !== 1 || this.state.candlesOut) {
-        stream.getTracks().forEach(t => t.stop()); return;
-      }
-      this._micStream = stream;
-      const AC = window.AudioContext || window.webkitAudioContext;
-      const ac = new AC(); this._micAc = ac;
-      const src = ac.createMediaStreamSource(stream);
-      const an = ac.createAnalyser(); an.fftSize = 512; src.connect(an);
-      const data = new Uint8Array(an.frequencyBinCount);
-      const check = () => {
-        if (!this._mounted || this.state.screen !== 1 || this.state.candlesOut) return;
-        an.getByteFrequencyData(data);
-        let sum = 0; for (let i = 0; i < data.length; i++) sum += data[i];
-        if (sum / data.length > 95) { this.blowCandles(); return; }
-        this._micRaf = requestAnimationFrame(check);
-      };
-      check();
-    }).catch(() => {});
-  }
-  stopMic() {
-    if (this._micRaf) cancelAnimationFrame(this._micRaf);
-    if (this._micStream) this._micStream.getTracks().forEach(t => t.stop());
-    if (this._micAc) { try { this._micAc.close(); } catch (e) {} }
-    this._micStream = null; this._micAc = null;
-  }
 
   // ---- BGM (synthesized Happy Birthday) ----
   melody = [
@@ -423,13 +390,27 @@ class Component extends DCLogic {
     v.muted = true;
     v.defaultMuted = true;
     v.volume = 0;
+    let done = false;
     const seek = () => {
+      if (done) return;
+      done = true;
       try { v.currentTime = Math.min(1, (v.duration || 2) * this.freezeAt); } catch (err) {}
-      v.pause();
-      v.style.opacity = '1';
+      // iOS/모바일 웹뷰는 currentTime만 바꿔선 프레임을 안 그리는 경우가 있어 play→pause로 강제 디코딩
+      const p = v.play();
+      if (p && p.then) {
+        p.then(() => { v.pause(); v.style.opacity = '1'; }).catch(() => { v.style.opacity = '1'; });
+      } else {
+        v.pause();
+        v.style.opacity = '1';
+      }
     };
     if (v.readyState >= 2) seek();
-    else v.addEventListener('loadeddata', seek, { once: true });
+    else {
+      v.addEventListener('loadeddata', seek, { once: true });
+      v.addEventListener('canplay', seek, { once: true });
+      v.load();
+    }
+    setTimeout(seek, 800); // 이벤트가 안 오는 웹뷰 대비 안전장치
     v.pause();
   };
 
@@ -510,7 +491,7 @@ class Component extends DCLogic {
       introSub: s.introSub,
       letterText: s.letterText,
       letterDone: s.letterDone,
-      candleHint: s.candlesOut ? '후~ 🎉 소원 이루어져라!' : '케이크를 탭하거나 "후~" 불어봐!',
+      candleHint: s.candlesOut ? '후~ 🎉 소원 이루어져라!' : '케이크를 탭해서 촛불을 꺼봐!',
       flameStyle,
       musicIcon: s.musicOn ? '🔊' : '🎵',
       toggleMusic: this.toggleMusic,
